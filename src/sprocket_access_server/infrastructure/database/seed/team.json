@@ -1,0 +1,70 @@
+[
+    {
+        "template_id": "template.team.owner",
+        "name": "Owner",
+        "nodes": ["team.template.*"],
+        "description": "All permissions in the Team"
+    },
+    {
+        "template_id": "template.team.admin",
+        "name": "Admin",
+        "nodes": [
+            "team.template.overview.read",
+            "team.template.confirmation.confirm",
+            "team.template.status.suspend",
+            "team.template.status.activate",
+            "team.template.status.archive",
+            "team.template.users.read",
+            "team.template.users.invite",
+            "team.template.users.manage",
+            "team.template.users.remove",
+            "team.template.packages.read",
+            "team.template.packages.create",
+            "team.template.packages.manage",
+            "team.template.packages.confirm",
+            "team.template.packages.download",
+            "team.template.package_uploads.create",
+            "team.template.package_uploads.confirm",
+            "team.template.keys.read",
+            "team.template.keys.manage",
+            "team.template.keys.distribute",
+            "team.template.keys.take",
+            "team.template.keys.release",
+            "team.template.keys.read_batch",
+            "team.template.keys.confirm",
+            "team.template.permission_templates.read",
+            "team.template.permission_templates.create",
+            "team.template.permission_templates.manage",
+            "team.template.permission_templates.confirm",
+            "team.template.permission_assignments.read",
+            "team.template.permission_assignments.manage",
+            "team.template.audit.read"
+        ],
+        "description": "Team administration permissions"
+    },
+    {
+        "template_id": "template.team.developer",
+        "name": "Developer",
+        "nodes": [
+            "team.template.overview.read",
+            "team.template.packages.read",
+            "team.template.packages.create",
+            "team.template.packages.manage",
+            "team.template.packages.download",
+            "team.template.package_uploads.create",
+            "team.template.package_uploads.confirm",
+            "team.template.keys.read"
+        ],
+        "description": "Package development permissions"
+    },
+    {
+        "template_id": "template.team.tester",
+        "name": "Tester",
+        "nodes": [
+            "team.template.overview.read",
+            "team.template.packages.read",
+            "team.template.packages.download"
+        ],
+        "description": "Package testing permissions"
+    }
+]

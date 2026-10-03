@@ -1,0 +1,28 @@
+[
+    {
+        "template_id": "template.owner",
+        "name": "Owner",
+        "nodes": ["*"],
+        "description": "All system and Team permissions"
+    },
+    {
+        "template_id": "template.superadmin",
+        "name": "SuperAdmin",
+        "nodes": ["system.*", "team.system.*", "team.template.*"],
+        "description": "System administration permissions"
+    },
+    {
+        "template_id": "template.user",
+        "name": "User",
+        "nodes": [
+            "system.authentication.me.read",
+            "system.authentication.me.authorization.read",
+            "system.authentication.me.teams.read",
+            "system.authentication.team_context.select",
+            "system.authentication.session.revoke",
+            "system.team_applications.create",
+            "system.team_applications.read"
+        ],
+        "description": "Basic authenticated user permissions"
+    }
+]

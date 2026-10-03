@@ -1,0 +1,15 @@
+.venv/
+.idea/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+data/
+logs/
+admin-ui/node_modules/
+admin-ui/dist/
+test-results/
+coverage.xml
+.coverage
+.pytest_cache/

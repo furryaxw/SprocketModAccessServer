@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sprocketmods.furryaxw.top/schemas/sprocket-private-index.schema.json",
+  "title": "Sprocket private package index",
+  "description": "GET /v1/packages 的响应：Team 列表，每个 Team 下挂它自己的包条目。条目就是公开 v3 条目，私有只加条目级 signature。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "server", "teams"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$" },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["server_id", "name"],
+      "properties": {
+        "server_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "teams": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["team_id", "name", "packages"],
+        "properties": {
+          "team_id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string" },
+          "packages": {
+            "type": "array",
+            "items": { "$ref": "sprocket-mod.schema.json" }
+          }
+        }
+      }
+    }
+  }
+}
