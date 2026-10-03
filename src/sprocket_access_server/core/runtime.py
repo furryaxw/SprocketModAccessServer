@@ -9,7 +9,8 @@ import uvicorn
 
 from .contracts import ModuleContext, attach_modules, register_modules
 from ..domain.protocol import ServerInfo
-from ..infrastructure.configuration.settings import ServerSettings
+from ..infrastructure.configuration.paths import installation_root
+from ..infrastructure.configuration.settings import ServerSettings, load_environment_file
 from ..infrastructure.database import SchemaRegistry, SQLiteDatabase
 from ..infrastructure.events import InfrastructureEventBus
 from ..infrastructure.logging import configure_logging
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_app(*, base_dir: Path | None = None):
-    root = (base_dir or Path.cwd()).expanduser()
+    root = (base_dir or installation_root()).expanduser()
     settings = ServerSettings.from_environment()
     log_level = os.environ.get("SMAS_LOG_LEVEL", "INFO")
     configure_logging(log_level)
@@ -165,14 +166,18 @@ def build_app(*, base_dir: Path | None = None):
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_environment_file()
     parser = argparse.ArgumentParser(description="Start Sprocket Mod Access Server")
     parser.add_argument("--host", default=os.environ.get("SMAS_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("SMAS_PORT", "8787")))
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args(argv)
     configure_logging(os.environ.get("SMAS_LOG_LEVEL", "INFO"))
+    # 应用字符串由包名推导：`-m src.sprocket_access_server.core.runtime` 与
+    # `-m sprocket_access_server.core.runtime`（PYTHONPATH=src）的包名不同，
+    # 写死短名会让 uvicorn 在检出根启动时找不到模块。
     uvicorn.run(
-        "sprocket_access_server.core.runtime:build_app",
+        f"{__package__}.runtime:build_app",
         factory=True,
         host=args.host,
         port=args.port,

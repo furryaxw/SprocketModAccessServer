@@ -26,14 +26,16 @@ sprocket_access_server.core.runtime:build_app
 
 ```powershell
 Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m sprocket_access_server.core.runtime
+.\.venv\Scripts\python.exe -m src.sprocket_access_server.core.runtime
 ```
 
-或使用 Uvicorn：
+入口从检出根运行，`.env`、`data/` 与 `logs/` 都按检出位置解析，不跟当前工作目录走；`SMAS_ROOT` 可把运行状态放到检出之外。
+
+等价的 Uvicorn 写法：
 
 ```powershell
 $env:PYTHONPATH = "src"
-.\.venv\Scripts\uvicorn.exe --factory sprocket_access_server.core.runtime:build_app --host 127.0.0.1 --port 8787
+.\.venv\Scripts\uvicorn.exe --factory sprocket_access_server.core.runtime:build_app --env-file .env --host 127.0.0.1 --port 8787
 ```
 
 ## 相关文档

@@ -6,6 +6,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
+
+from .paths import environment_file
+
+
+def load_environment_file(path: Path | None = None) -> None:
+    """把 `.env` 并入进程环境。
+
+    只在进程入口调用：`build_app` 会被测试与嵌入式调用直接触发，配置来源必须留在调用方手里。
+    进程里已有的变量优先，因此容器或编排注入的值不会被文件覆盖；文件不存在时是空操作。
+    关闭插值：密钥是任意随机串，含 `$` 的值必须原样进入环境，不能被当成变量引用展开。
+    """
+    load_dotenv(dotenv_path=path or environment_file(), override=False, interpolate=False)
+
 
 @dataclass(frozen=True)
 class ServerSettings:

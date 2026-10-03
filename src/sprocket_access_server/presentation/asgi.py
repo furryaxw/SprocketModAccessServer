@@ -7,7 +7,6 @@ import os
 import time
 from contextlib import asynccontextmanager
 from contextlib import suppress
-from pathlib import Path
 from typing import Any
 
 from starlette.applications import Starlette
@@ -24,6 +23,7 @@ from .v1_http import V1HttpAdapter
 from .ws_hub import ConnectionState, WebSocketHub
 from ..domain.errors import ApiError
 from ..domain.protocol import PROTOCOL_VERSION, ServerInfo
+from ..infrastructure.configuration.paths import admin_ui_dist
 from ..infrastructure.events import ResourceChanged
 from ..infrastructure.messaging.email_worker import run_email_worker
 from ..infrastructure.network import ResourceRegistry, WsEnvelope, json_dumps, response_payload
@@ -72,7 +72,7 @@ def create_app(server_info: ServerInfo, authentication: AuthenticationService, *
         return JSONResponse({"status": "ok", "protocol_version": PROTOCOL_VERSION})
 
     async def admin_page(_request: Request) -> Response:
-        built = Path(__file__).parents[3] / "admin-ui" / "dist" / "index.html"
+        built = admin_ui_dist() / "index.html"
         if not built.is_file():
             return JSONResponse(
                 {"code": "admin_ui_unavailable", "message": "built admin client is not installed"},
@@ -86,7 +86,7 @@ def create_app(server_info: ServerInfo, authentication: AuthenticationService, *
 
     async def admin_shell(request: Request) -> Response:
         # dist 根部的静态文件（favicon 等）没有单独挂载点，先按路径找文件，再回落到 SPA 外壳。
-        built_root = Path(__file__).parents[3] / "admin-ui" / "dist"
+        built_root = admin_ui_dist()
         candidate = (built_root / request.path_params.get("path", "")).resolve()
         if built_root.resolve() in candidate.parents and candidate.is_file():
             return FileResponse(candidate)
@@ -246,7 +246,7 @@ def create_app(server_info: ServerInfo, authentication: AuthenticationService, *
         )
         return Response(html, status_code=200, media_type="text/html")
 
-    built_assets = Path(__file__).parents[3] / "admin-ui" / "dist" / "assets"
+    built_assets = admin_ui_dist() / "assets"
     v1 = V1HttpAdapter(module_context)
     routes = [
         Route("/", admin_root, methods=["GET"]),

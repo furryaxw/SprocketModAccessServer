@@ -10,6 +10,8 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from ..configuration.paths import installation_root
+
 
 def canonical_json(value: Any) -> bytes:
     # allow_nan=False：含 NaN/Infinity 的条目无法被客户端解析，验签前就应拒绝。
@@ -22,8 +24,11 @@ def load_private_key(*, file_path: str | None = None, pem: str | None = None) ->
     configured_pem = os.environ.get("SMAS_SIGNING_PRIVATE_KEY", "") if pem is None else pem
     raw: bytes
     if configured_path.strip():
+        key_path = Path(configured_path).expanduser()
+        if not key_path.is_absolute():
+            key_path = installation_root() / key_path
         try:
-            raw = Path(configured_path).expanduser().read_bytes()
+            raw = key_path.read_bytes()
         except OSError as exc:
             raise ValueError("signing private key file cannot be read") from exc
     elif configured_pem.strip():

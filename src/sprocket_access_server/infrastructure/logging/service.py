@@ -9,6 +9,8 @@ from pathlib import Path
 
 import colorlog
 
+from ..configuration.paths import installation_root
+
 MAX_LOG_BYTES = 5 * 1024 * 1024
 MAX_LOG_FILES = 100
 REDACTED = "<redacted>"
@@ -82,7 +84,7 @@ def configure_logging(level: str = "INFO", *, log_dir: Path | None = None) -> lo
     console.addFilter(redaction_filter)
     root_logger.addHandler(console)
 
-    directory = (log_dir or Path.cwd() / "logs").expanduser()
+    directory = (log_dir or installation_root() / "logs").expanduser()
     directory.mkdir(parents=True, exist_ok=True)
     _remove_excess_logs(directory)
 

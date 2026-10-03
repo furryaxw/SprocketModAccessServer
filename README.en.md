@@ -26,14 +26,16 @@ sprocket_access_server.core.runtime:build_app
 
 ```powershell
 Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m sprocket_access_server.core.runtime
+.\.venv\Scripts\python.exe -m src.sprocket_access_server.core.runtime
 ```
+
+The entry point runs from the checkout root; `.env`, `data/` and `logs/` resolve from the checkout instead of the working directory, and `SMAS_ROOT` moves runtime state outside the checkout.
 
 Or with Uvicorn:
 
 ```powershell
 $env:PYTHONPATH = "src"
-.\.venv\Scripts\uvicorn.exe --factory sprocket_access_server.core.runtime:build_app --host 127.0.0.1 --port 8787
+.\.venv\Scripts\uvicorn.exe --factory sprocket_access_server.core.runtime:build_app --env-file .env --host 127.0.0.1 --port 8787
 ```
 
 ## Docs
