@@ -47,7 +47,7 @@ class FakeAuthorization:
 
 
 class PrivateIndexHttpShapeTests(unittest.TestCase):
-    def _app(self, directory: str):
+    def _app(self, directory: str, *, public_base_url: str = ""):
         database = SQLiteDatabase(Path(directory) / "access.db")
         sessions = SQLiteSessionStore(database, b"pepper")
         session = sessions.create("123", ttl=10 ** 9)
@@ -59,17 +59,20 @@ class PrivateIndexHttpShapeTests(unittest.TestCase):
                            "published", 5, SNAPSHOT),
             now=5, team_id="default",
         )
+        services = {
+            "authentication": AuthenticationService(FakeGitHub(), sessions),
+            "authorization_service": FakeAuthorization(),
+            "packages": store,
+            "server_info": ServerInfo("server-1", "Test", None, {}),
+            # 未配置签名身份：走未签名的条目分支。
+            "signing_key": None,
+            "signing_key_id": None,
+        }
+        if public_base_url:
+            services["publisher"] = SimpleNamespace(download_base_url=public_base_url)
         context = SimpleNamespace(
             resources=ResourceRegistry(),
-            service=lambda name: {
-                "authentication": AuthenticationService(FakeGitHub(), sessions),
-                "authorization_service": FakeAuthorization(),
-                "packages": store,
-                "server_info": ServerInfo("server-1", "Test", None, {}),
-                # 未配置签名身份：走未签名的条目分支。
-                "signing_key": None,
-                "signing_key_id": None,
-            }[name],
+            service=lambda name: services[name],
         )
         app = create_app(ServerInfo("server-1", "Test", None, {}),
                          context.service("authentication"), module_context=context)
@@ -102,6 +105,37 @@ class PrivateIndexHttpShapeTests(unittest.TestCase):
             [(team["team_id"], len(team["packages"])) for team in payload["teams"]],
             [("default", 1), ("quiet", 0)],
         )
+
+    def test_index_uses_the_declared_public_origin_whenever_it_is_configured(self) -> None:
+        with TemporaryDirectory() as directory:
+            app, session = self._app(directory, public_base_url="https://raw.example.test:28482")
+            # 配了就一律用它：请求 origin 可用（这里是另一个 https origin，本可原样使用）时不拿它，
+            # 不可用（明文 http 加非 loopback 主机名，反向代理终止 TLS 时服务端看到的就是这种请求）
+            # 时更不拿它。
+            for scheme, host in (("https", "internal.example.test:9443"), ("http", "raw.example.test")):
+                with self.subTest(origin=f"{scheme}://{host}"):
+                    status, payload = json_call(
+                        app, "GET", "/v1/packages", scheme=scheme,
+                        headers={"authorization": f"Bearer {session['token']}", "host": host},
+                    )
+                    self.assertEqual(status, 200)
+                    asset = payload["teams"][0]["packages"][0]["releases"][0]["assets"][0]
+                    self.assertEqual(asset["download_url"],
+                                     "https://raw.example.test:28482/v1/packages/default.example/download")
+                    validate(payload, load_schema(INDEX_SCHEMA), base=SCHEMAS)
+
+    def test_index_keeps_the_request_origin_when_no_public_origin_is_declared(self) -> None:
+        with TemporaryDirectory() as directory:
+            app, session = self._app(directory)
+            status, payload = json_call(
+                app, "GET", "/v1/packages", scheme="http",
+                headers={"authorization": f"Bearer {session['token']}", "host": "raw.example.test"},
+            )
+            self.assertEqual(status, 200)
+            asset = payload["teams"][0]["packages"][0]["releases"][0]["assets"][0]
+            # 没有可替代的声明时仍给请求 origin，并留一条 WARNING 让人知道客户端会拒这个地址。
+            self.assertEqual(asset["download_url"],
+                             "http://raw.example.test/v1/packages/default.example/download")
 
     def test_entry_release_and_asset_keys_are_the_public_v3_shape(self) -> None:
         with TemporaryDirectory() as directory:

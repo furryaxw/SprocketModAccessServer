@@ -5,6 +5,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -14,6 +15,19 @@ from ..domain.errors import ApiError
 from ..domain.resources import DEFAULT_TEAM_ID, SYSTEM_TEAM_ID, TEMPLATE_TEAM_ID, split_package_id
 
 logger = logging.getLogger(__name__)
+
+# 客户端接受的下载地址只有两类：https 的任意主机，或 http 的 loopback。
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _usable_download_origin(origin: str) -> bool:
+    """这个 origin 是否属于客户端会接受的两类地址。"""
+    parsed = urlsplit(origin)
+    if not parsed.scheme or not parsed.hostname:
+        return False
+    if parsed.scheme == "https":
+        return True
+    return parsed.scheme == "http" and parsed.hostname in _LOOPBACK_HOSTS
 
 
 def _iso_now(timestamp: int) -> str:
@@ -104,8 +118,7 @@ class V1HttpAdapter:
         teams, readable = self._visible_teams(user_id, now=now)
         signing_key = self._service("signing_key")
         signing_key_id = self._service("signing_key_id")
-        # 下载端点的绝对 URL 指向本次请求到达的 origin，客户端可直接使用。
-        download_base_url = f"{request.url.scheme}://{request.url.netloc}"
+        download_base_url = self._download_base_url(request)
         buckets: dict[str, dict[str, Any]] = {}
         for team in teams:
             if team["team_id"] in {SYSTEM_TEAM_ID, TEMPLATE_TEAM_ID}:
@@ -281,6 +294,36 @@ class V1HttpAdapter:
             return self.context.service(name)
         except (KeyError, RuntimeError) as exc:
             raise ApiError(503, "distribution_unavailable", "server service is not configured") from exc
+
+    def _download_base_url(self, request: Request) -> str:
+        """索引里下载端点的基准 origin。
+
+        `SMAS_PUBLIC_BASE_URL` 配了就一律用它：TLS 通常在反向代理上终止，服务端看到的请求 origin
+        往往不是用户访问的那个（明文 http、主机名还没有端口），而配置是运维明确声明的对外入口。
+        没配时才退回请求 origin；退回的这个若不是客户端会接受的类型，记一条 WARNING——否则失败
+        只会表现为客户端拒绝该地址。
+        """
+        configured = self._configured_public_base_url()
+        if configured:
+            return configured
+        origin = f"{request.url.scheme}://{request.url.netloc}"
+        if not _usable_download_origin(origin):
+            logger.warning(
+                "package index download origin is not accepted by clients origin=%s; "
+                "set SMAS_PUBLIC_BASE_URL to the externally reachable https origin",
+                origin,
+            )
+        return origin
+
+    def _configured_public_base_url(self) -> str:
+        """发布器上配置的服务端公开 origin（`SMAS_PUBLIC_BASE_URL`）；未配置时为空串。"""
+        if self.context is None:
+            return ""
+        try:
+            publisher = self.context.service("publisher")
+        except (KeyError, RuntimeError):
+            return ""
+        return str(getattr(publisher, "download_base_url", "") or "").strip()
 
     @staticmethod
     def _json(value: dict[str, Any], status_code: int = 200) -> JSONResponse:
