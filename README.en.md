@@ -38,13 +38,6 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\uvicorn.exe --factory sprocket_access_server.core.runtime:build_app --env-file .env --host 127.0.0.1 --port 8787
 ```
 
-## Docs
-
-- [Authorization Design](docs/authorization-design.md)
-- [Authorization Glossary](docs/authorization-glossary.md)
-- [Backend Module Architecture](docs/backend-module-architecture.md)
-- [Permission Tree](docs/permission-tree.md)
-
 ## License
 
 This project is licensed under GNU Affero General Public License v3.0
