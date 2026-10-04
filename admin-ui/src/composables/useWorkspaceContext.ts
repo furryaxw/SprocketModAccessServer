@@ -106,6 +106,16 @@ function sameWorkspace(
     return leftKind === right.workspace_kind && leftTeamId === right.team_id;
 }
 
+function sameWorkspaceOption(
+    left: WorkspaceOption | null,
+    right: WorkspaceOption | null,
+): boolean {
+    if (!left || !right) return false;
+    return sameWorkspace(left, right)
+        && left.name === right.name
+        && left.owner_user_id === right.owner_user_id;
+}
+
 function parseWorkspaceOptions(response: TransportResponse): WorkspaceOption[] {
     const failure = responseFailure(response);
     if (failure) throw failure;
@@ -187,7 +197,11 @@ export function useWorkspaceContext() {
             if (hadSelection) {
                 const current = loaded.find((item) => sameWorkspace(item, selection.value));
                 if (current) {
-                    selection.value = current;
+                    // 内容没变就不换引用：selectedWorkspace 是 AppShell 观察者的依赖，
+                    // 每轮列表刷新都赋一个新对象会被读成"换了工作区"。
+                    if (!sameWorkspaceOption(current, selection.value)) {
+                        selection.value = current;
+                    }
                     writeStoredWorkspace(current);
                     return loaded;
                 }

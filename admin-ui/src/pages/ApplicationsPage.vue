@@ -58,6 +58,7 @@ const messages = {
         createdToast: "Team 申请已提交。",
         pending: "待审核",
         permission: "没有查看 Team 申请的权限。",
+        workspaceRequired: "Team 申请只在系统工作区可用。",
         invalid: "Team 申请响应格式无效。",
         requiredFields: "Team 名称不能为空。",
     },
@@ -96,6 +97,7 @@ const messages = {
         approved: "Approved",
         rejected: "Rejected",
         permission: "You do not have permission to view Team applications.",
+        workspaceRequired: "Team applications are only available in the System workspace.",
         invalid: "The Team applications response is invalid.",
         requiredFields: "A Team name is required.",
     },
@@ -111,6 +113,11 @@ const zhExtra = {
 const {locale, t: baseT} = useLocale();
 const authorization = useAuthorization();
 const workspaceContext = useWorkspaceContext();
+// Team 申请是系统工作区资源：后端对四个动作都要求连接的工作区上下文正好是 System
+// （applications/resources.py 的 _require_system_team_permission）。而授权快照里的
+// effective_permissions 在 Team 工作区下同样含系统级节点，所以"有权限"不足以说明这次
+// 读会被接受——可见性判定必须连工作区一起看，否则请求必被 403 拒回。
+const isSystemWorkspace = computed(() => workspaceContext.selected.value?.workspace_kind === "system");
 type ApplicationPage = {
     items: Application[];
     total: number;
@@ -120,10 +127,18 @@ type ApplicationPage = {
 
 const request = useRequest<ApplicationPage>();
 const toast = useToast();
-const canRead = computed(() => authorization.can("system.team_applications.read"));
-const canCreate = computed(() => authorization.can("system.team_applications.create"));
-const canApprove = computed(() => authorization.can("system.team_applications.approve"));
-const canReject = computed(() => authorization.can("system.team_applications.reject"));
+const canRead = computed(
+    () => isSystemWorkspace.value && authorization.can("system.team_applications.read"),
+);
+const canCreate = computed(
+    () => isSystemWorkspace.value && authorization.can("system.team_applications.create"),
+);
+const canApprove = computed(
+    () => isSystemWorkspace.value && authorization.can("system.team_applications.approve"),
+);
+const canReject = computed(
+    () => isSystemWorkspace.value && authorization.can("system.team_applications.reject"),
+);
 const selectedApplication = ref<Application | null>(null);
 const rejectionReason = ref("");
 const mutationPending = ref(false);
@@ -435,7 +450,9 @@ function nextPage() {
 
         <RequestState
             :phase="phase"
-            :message="phase === 'forbidden' ? pageT('permission') : null"
+            :message="phase === 'forbidden'
+                ? (isSystemWorkspace ? pageT('permission') : pageT('workspaceRequired'))
+                : null"
             @retry="load"
             @cancel="request.cancel"
         />

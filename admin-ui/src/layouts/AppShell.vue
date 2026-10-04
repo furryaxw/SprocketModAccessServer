@@ -365,20 +365,28 @@ watch(
     },
     {immediate: true},
 );
+// 这个 watch 的依赖会被它自己触发的导航改写：`navigation` 每次求值都产生新数组，授权快照刷新
+// 又会让 ready 短暂为假。没有闸门时"重定向 → 守卫刷新快照 → 依赖再变 → 再重定向"会自持成导航
+// 循环（每轮一次 session.refresh 加一次 loadTeams）。同一个"工作区 + 路由"只重定向一次；
+// 只有路由在当前工作区可见（或已经回到概览）才清记录，快照未就绪时不清——否则 ready 的闪烁
+// 会把记录洗掉，每轮又能重定向一次。
+let redirectedFor = "";
 watch(
     [selectedWorkspace, navigation, () => route.name],
     ([workspace, items, routeName]) => {
-        if (
-            !workspace
-            || !authorization.ready.value
-            || routeName === "overview"
-            || routeName === "overview-content"
-        ) {
+        if (!workspace || routeName === "overview" || routeName === "overview-content") {
+            redirectedFor = "";
             return;
         }
-        if (!items.some((item) => item.name === routeName)) {
-            void router.replace({name: "overview-content"});
+        if (!authorization.ready.value) return;
+        if (items.some((item) => item.name === routeName)) {
+            redirectedFor = "";
+            return;
         }
+        const key = `${workspaceValue(workspace)}|${String(routeName ?? "")}`;
+        if (redirectedFor === key) return;
+        redirectedFor = key;
+        void router.replace({name: "overview-content"});
     },
     {immediate: true},
 );
