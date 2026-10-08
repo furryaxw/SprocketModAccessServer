@@ -89,3 +89,38 @@ def revoke_team_assignments(connection, *, team_id: str, user_id: str, now: int)
         (now, now, team_id, user_id),
     )
     return int(cursor.rowcount)
+
+
+def purge_permission_node(connection, node: str) -> dict[str, int]:
+    """删掉一个资源节点的全部痕迹：目录行、授权行、模板行。
+
+    资源随数据消失时（例如整包删除）调它。授权行里出现该节点或其派生动作的都算残留：
+    留着不看会继续出现在权限编辑器与模板内容里，而对不存在的资源没有任何作用。
+    只剩空壳的授权行（节点被清空）一并删除——它本来就什么都授不出去，却会让人仍算 Team 成员。
+    """
+    values = (node, f"{node}.%")
+    affected = [
+        str(row["grant_id"]) for row in connection.execute(
+            "SELECT DISTINCT grant_id FROM grant_assignments WHERE node = ? OR node LIKE ?", values
+        ).fetchall()
+    ]
+    counts = {
+        "catalog": int(connection.execute(
+            "DELETE FROM permission_nodes WHERE node = ? OR node LIKE ?", values
+        ).rowcount),
+        "grants": int(connection.execute(
+            "DELETE FROM grant_assignments WHERE node = ? OR node LIKE ?", values
+        ).rowcount),
+        "templates": int(connection.execute(
+            "DELETE FROM template_assignments WHERE node = ? OR node LIKE ?", values
+        ).rowcount),
+    }
+    counts["empty_grants"] = 0
+    for grant_id in affected:
+        remaining = connection.execute(
+            "SELECT COUNT(*) AS total FROM grant_assignments WHERE grant_id = ?", (grant_id,)
+        ).fetchone()["total"]
+        if int(remaining) == 0:
+            connection.execute("DELETE FROM grants WHERE grant_id = ?", (grant_id,))
+            counts["empty_grants"] += 1
+    return counts

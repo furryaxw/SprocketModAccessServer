@@ -107,6 +107,14 @@ class ResourceRegistry:
     def definitions(self) -> tuple[ResourceDefinition, ...]:
         return tuple(self._resources.values())
 
+    def unregister(self, node: str) -> None:
+        """注销一个节点。
+
+        只有随数据消失的节点才会走这里（例如整包删除后的 `team.<team>.<mod>`）；固定资源
+        （system/team 那一层）永不注销，所以目录不会因为一次删除而少掉它们。
+        """
+        self._resources.pop(self._normalize_node(node), None)
+
     def resolve(self, action: str, node: str) -> ResourceMatch | None:
         normalized_action = self._normalize_action(action)
         normalized_node = self._normalize_node(node)

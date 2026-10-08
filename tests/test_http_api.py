@@ -558,11 +558,14 @@ class HttpApiTests(unittest.TestCase):
             api.packages.publish(PackageVersion("default.laser", "1.0.0", "team.default.packages.laser", "a" * 64, 12, "published", 100, PACKAGE_METADATA),
                                  now=100)
             headers = {"Authorization": f"Bearer {exchanged.payload['token']}", "Idempotency-Key": "metadata-1"}
+            # 版本元数据是整体替换：提交里必须带可发布的完整文档（安装规则）。
+            body = json.dumps({"metadata": {**PACKAGE_METADATA, "channel": "beta",
+                                            "display_name": {"en": "Laser Beta"}}}).encode("utf-8")
             changed = api.dispatch("metadata", "team.default.packages", data={"package_id": "default.laser", "version": "1.0.0"},
-                                   body=b'{"metadata":{"channel":"beta","display_name":{"en":"Laser Beta"}}}',
+                                   body=body,
                                    headers=headers, now=101)
             replay = api.dispatch("metadata", "team.default.packages", data={"package_id": "default.laser", "version": "1.0.0"},
-                                  body=b'{"metadata":{"channel":"beta","display_name":{"en":"Laser Beta"}}}',
+                                  body=body,
                                   headers=headers, now=102)
             stored = api.packages.get("default.laser", "1.0.0")
         self.assertEqual(changed.status, 200)

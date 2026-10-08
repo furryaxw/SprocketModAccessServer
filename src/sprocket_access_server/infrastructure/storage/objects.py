@@ -72,6 +72,10 @@ class LocalFileObjectStorage:
     def exists(self, digest: str) -> bool:
         return self._path(digest).is_file()
 
+    def delete(self, digest: str) -> None:
+        """按摘要删字节；对象已不在时是空操作（回收是幂等的）。"""
+        self._path(digest).unlink(missing_ok=True)
+
     def create_upload(self, *, object_key: str, size: int, content_type: str, expires_in: int) -> dict[str, object]:
         if not object_key or "/" in object_key or "\\" in object_key or object_key in {".",
                                                                                        ".."} or size < 1 or expires_in < 1:
@@ -177,6 +181,10 @@ class S3ObjectStorage:
             if _missing_object(exc):
                 return False
             raise
+
+    def delete(self, digest: str) -> None:
+        """删对象；S3 的 delete 对不存在的键同样成功，回收因此可以重放。"""
+        self.client.delete_object(Bucket=self.bucket, Key=self._key(digest))
 
     def create_upload(self, *, object_key: str, size: int, content_type: str, expires_in: int) -> dict[str, object]:
         if not object_key or size < 1 or expires_in < 1:

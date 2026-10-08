@@ -147,12 +147,25 @@ class PackageStoreTests(unittest.TestCase):
             package = PackageVersion("default.example", "1.0.0", "team.default.packages.default_example",
                                      "a" * 64, 10, "published", 1, SNAPSHOT)
             store.publish(package, now=1)
+            # 版本元数据是整体替换：提交什么就存什么（保留不可变的归档身份与载荷形态）。
             store.update_metadata(package.package_id, package.version,
-                                  {"channel": "beta", "display_name": {"en": "Beta"}})
+                                  {"install": INSTALL, "channel": "beta", "display_name": {"en": "Beta"}})
             updated = store.get(package.package_id, package.version)
             self.assertEqual(updated.metadata["channel"], "beta")
+            self.assertEqual(sorted(updated.metadata), ["channel", "display_name", "install"])
             self.assertEqual(updated.archive_digest, package.archive_digest)
             self.assertEqual(updated.archive_size, package.archive_size)
+
+    def test_metadata_replacement_must_stay_publishable(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = SQLitePackageStore(SQLiteDatabase(Path(directory) / "access.db"))
+            package = PackageVersion("default.example", "1.0.0", "team.default.default_example",
+                                     "a" * 64, 10, "published", 1, SNAPSHOT)
+            store.publish(package, now=1)
+            for metadata in ({}, {"channel": "beta"}):
+                with self.subTest(metadata=metadata):
+                    with self.assertRaises(ValueError):
+                        store.update_metadata(package.package_id, package.version, metadata)
 
     def test_metadata_cannot_replace_identity_or_archive_fields(self) -> None:
         with TemporaryDirectory() as directory:

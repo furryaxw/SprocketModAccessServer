@@ -53,7 +53,8 @@
             "team.template.packages.download",
             "team.template.package_uploads.create",
             "team.template.package_uploads.confirm",
-            "team.template.keys.read"
+            "team.template.keys.read",
+            "team.template.packages.confirm"
         ],
         "description": "Package development permissions"
     },

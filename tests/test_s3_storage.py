@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 
 from sprocket_access_server.infrastructure.storage.objects import LocalFileObjectStorage, S3ObjectStorage
@@ -47,7 +48,8 @@ class FakeS3:
             raise KeyError(Key)
 
     def delete_object(self, *, Bucket, Key):
-        del self.objects[(Bucket, Key)]
+        # 真实 S3 对不存在的键也返回成功：替身必须一样，回收才敢重放。
+        self.objects.pop((Bucket, Key), None)
 
     def generate_presigned_url(self, operation, Params, ExpiresIn):
         self.presigned.append({"operation": operation, "params": Params, "expires_in": ExpiresIn})
@@ -169,6 +171,28 @@ class S3StorageTests(unittest.TestCase):
     def test_download_ttl_must_be_positive(self):
         with self.assertRaises(ValueError):
             S3ObjectStorage("bucket", client=FakeS3(), download_url_ttl=0)
+
+    def test_delete_removes_the_digest_object_and_replays(self):
+        client = FakeS3()
+        storage = S3ObjectStorage("bucket", prefix="mods", client=client)
+        digest = hashlib.sha256(b"archive").hexdigest()
+        client.objects[("bucket", f"mods/{digest}")] = b"archive"
+        storage.delete(digest)
+        self.assertEqual(client.objects, {})
+        # 重放（对象已经不在了）同样是成功。
+        storage.delete(digest)
+        self.assertEqual(client.objects, {})
+
+    def test_local_delete_removes_the_digest_file_and_replays(self):
+        with tempfile.TemporaryDirectory() as directory:
+            storage = LocalFileObjectStorage(Path(directory))
+            content = b"archive"
+            digest = hashlib.sha256(content).hexdigest()
+            storage.put(BytesIO(content), digest=digest, size=len(content))
+            storage.delete(digest)
+            self.assertFalse(storage.exists(digest))
+            storage.delete(digest)
+            self.assertFalse(storage.exists(digest))
 
 
 if __name__ == "__main__":

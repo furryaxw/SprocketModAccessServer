@@ -5,11 +5,13 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Iterable
 
 from ...domain.resources import DEFAULT_TEAM_ID, SYSTEM_TEAM_ID, package_resource_node, split_package_id
 from ...infrastructure.database import SQLiteDatabase
 from ...infrastructure.events import ResourceChanged
 from ...infrastructure.security.signing import sign_manifest
+from ..permission_assignments.provisioning import purge_permission_node
 from .files import PAYLOAD_DLL, PAYLOAD_KIND_KEY, PAYLOAD_ZIP
 from .metadata import validate_metadata
 
@@ -534,17 +536,106 @@ class SQLitePackageStore:
             data={"version": version, "status": status},
         )
 
+    def delete_version(self, package_id: str, version: str, *, team_id: str | None = None,
+                       now: int | None = None) -> PackageRecord:
+        """删除一个版本行：归档引用随行消失，索引与下载随即看不到它。
+
+        归档字节本身不删（内容寻址，同一摘要可能被别的版本引用，且没有引用计数），留给存储侧回收。
+        包实体保留：没有版本的包是合法状态（新建 Package 就是的），再次上传同一版本号即可。
+        """
+        timestamp = int(time.time()) if now is None or now <= 0 else now
+        with self.database.transaction() as connection:
+            cursor = connection.execute(
+                "DELETE FROM package_versions WHERE package_id = ? AND version = ? AND (? IS NULL OR team_id = ?)",
+                (package_id, version, team_id, team_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("package version was not found")
+            connection.execute(
+                "UPDATE packages SET updated_at = ? WHERE package_id = ?", (timestamp, package_id)
+            )
+        self._publish_change(
+            kind="delete",
+            action="manage",
+            package_id=package_id,
+            team_id=team_id,
+            data={"version": version},
+        )
+        record = self.record(package_id, team_id=team_id)
+        if record is None:
+            raise ValueError("package was not found")
+        return record
+
+    def delete_package(self, package_id: str, *, team_id: str | None = None) -> PackageRecord:
+        """删除包实体、它的全部版本，以及它的权限节点与残留授权。
+
+        版本行随包一起删除，因此版本号可以重新上传。节点痕迹（目录、授权、模板）一并清掉：
+        注册表那份是进程内的（调用方注销），而 `permission_nodes`/`grant_assignments`/
+        `template_assignments` 里的行会一直留着。
+        """
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM packages WHERE package_id = ? AND (? IS NULL OR team_id = ?)",
+                (package_id, team_id, team_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("package was not found")
+            owner_team_id = str(row["team_id"])
+            version_rows = connection.execute(
+                "SELECT * FROM package_versions WHERE package_id = ?", (package_id,)
+            ).fetchall()
+            connection.execute("DELETE FROM package_versions WHERE package_id = ?", (package_id,))
+            connection.execute("DELETE FROM packages WHERE package_id = ?", (package_id,))
+            try:
+                node = package_resource_node(owner_team_id, package_id)
+            except ValueError:
+                node = ""
+            if node:
+                purge_permission_node(connection, node)
+        self._publish_change(
+            kind="delete",
+            action="manage",
+            package_id=package_id,
+            team_id=owner_team_id,
+            data={"package_id": package_id},
+        )
+        return _package_record(row, version_rows)
+
+    def unreferenced_digests(self, digests: Iterable[str]) -> tuple[str, ...]:
+        """这些摘要里现在没有任何版本行引用的那些（跨包、跨 Team 一起算）。
+
+        归档是内容寻址的：同一个摘要可能被多个版本引用，所以只有引用计数归零才能删字节。
+        """
+        values = sorted({str(digest) for digest in digests if digest})
+        if not values:
+            return ()
+        with self.database.transaction() as connection:
+            return tuple(
+                digest for digest in values
+                if int(connection.execute(
+                    "SELECT COUNT(*) AS total FROM package_versions WHERE archive_digest = ?", (digest,)
+                ).fetchone()["total"]) == 0
+            )
+
     def update_metadata(self, package_id: str, version: str, metadata: dict[str, object], *,
                         team_id: str | None = None) -> PackageVersion:
+        """替换版本元数据快照。
+
+        载荷形态记在版本行里而不是元数据里（`_version_from_row` 读出即摘除），所以替换时必须
+        原样保留，否则单个 DLL 的资产扩展名会退回 `.zip`。
+        """
         if not isinstance(metadata, dict):
             raise ValueError("package metadata must be an object")
+        if not metadata:
+            raise ValueError("package metadata must not be empty")
         if any(key in metadata for key in IMMUTABLE_METADATA_FIELDS):
             raise ValueError("package metadata contains immutable fields")
         channel = metadata.get("channel")
         if channel is not None and (not isinstance(channel, str) or not _CHANNEL.fullmatch(channel)):
             raise ValueError("package channel is invalid")
+        validate_metadata(metadata)
         try:
-            encoded = json.dumps(metadata, ensure_ascii=False)
+            json.dumps(metadata, ensure_ascii=False)
         except (TypeError, ValueError) as exc:
             raise ValueError("package metadata is not JSON serializable") from exc
         with self.database.transaction() as connection:
@@ -555,12 +646,11 @@ class SQLitePackageStore:
             if row is None:
                 raise ValueError("package version was not found")
             current = json.loads(row["metadata_json"] or "{}")
-            if not isinstance(current, dict):
-                current = {}
-            current.update(json.loads(encoded))
+            kind = str(current.get(PAYLOAD_KIND_KEY, PAYLOAD_ZIP)) if isinstance(current, dict) else PAYLOAD_ZIP
+            stored = {**metadata, PAYLOAD_KIND_KEY: kind}
             connection.execute(
                 "UPDATE package_versions SET metadata_json = ? WHERE package_id = ? AND version = ? AND (? IS NULL OR team_id = ?)",
-                (json.dumps(current, ensure_ascii=False), package_id, version, team_id, team_id),
+                (json.dumps(stored, ensure_ascii=False), package_id, version, team_id, team_id),
             )
         updated = self.get(package_id, version, team_id=team_id)
         if updated is None:

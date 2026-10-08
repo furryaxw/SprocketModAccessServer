@@ -71,7 +71,7 @@ const messages: {zh: Record<string, string>; en: Record<string, string>} = {
     zh: {
         title: "Packages",
         description: "管理当前 Team 的 Package 与版本。",
-        catalogDescription: "只读查看跨 Team 的 Package 目录。",
+        catalogDescription: "查看跨 Team 的 Package 目录；管理动作按包所属 Team 的权限判定。",
         uploadScopeNote: "上传在 Team 工作区进行；这里是系统 Package 目录。",
         refresh: "刷新",
         package: "Package",
@@ -131,6 +131,15 @@ const messages: {zh: Record<string, string>; en: Record<string, string>} = {
         save: "保存",
         saved: "Package 已更新。",
         versionStatusSaved: "版本状态已更新。",
+        deleteVersion: "删除版本",
+        deleteVersionTitle: "确认删除版本",
+        deleteVersionBody: "删除后该版本的归档立即不可下载，版本号可以重新上传。",
+        versionDeleted: "版本已删除。",
+        deletePackage: "删除 Package",
+        deletePackageTitle: "确认删除 Package",
+        deletePackageBody: "删除后该 Package 与它的全部版本一起消失，版本号可以重新上传。",
+        packageDeleted: "Package 已删除。",
+        deleteConfirm: "删除",
         resumeDraft: "发现未完成上传草稿。",
         resumeNeedsFile: "重新选择同一个归档后继续上传。",
         resumeConfirm: "归档已上传，可以继续确认发布。",
@@ -140,7 +149,7 @@ const messages: {zh: Record<string, string>; en: Record<string, string>} = {
     en: {
         title: "Packages",
         description: "Manage the Packages and versions of the current Team.",
-        catalogDescription: "Read the cross-Team Package catalog.",
+        catalogDescription: "Browse the cross-Team Package catalog; manage actions are judged by the owning Team's permissions.",
         uploadScopeNote: "Uploads happen in a Team workspace; this is the system Package catalog.",
         refresh: "Refresh",
         package: "Package",
@@ -200,6 +209,15 @@ const messages: {zh: Record<string, string>; en: Record<string, string>} = {
         save: "Save",
         saved: "Package updated.",
         versionStatusSaved: "Version status updated.",
+        deleteVersion: "Delete version",
+        deleteVersionTitle: "Confirm version deletion",
+        deleteVersionBody: "The archive stops being downloadable immediately; the version number can be uploaded again.",
+        versionDeleted: "Version deleted.",
+        deletePackage: "Delete Package",
+        deletePackageTitle: "Confirm Package deletion",
+        deletePackageBody: "The Package and all of its versions disappear; version numbers can be uploaded again.",
+        packageDeleted: "Package deleted.",
+        deleteConfirm: "Delete",
         resumeDraft: "An unfinished upload draft was found.",
         resumeNeedsFile: "Select the same archive again to continue the upload.",
         resumeConfirm: "The archive is uploaded; publication can be confirmed.",
@@ -240,15 +258,9 @@ const canCreate = computed(() =>
     && Boolean(node.value)
     && authorization.can(`${node.value}.create`),
 );
-const canManage = computed(() =>
-    !systemWorkspace.value
-    && Boolean(node.value)
-    && authorization.can(`${node.value}.manage`),
-);
-// 版本状态变更沿用 preview + confirm 流程，节点上的 `confirm` 与 `manage` 缺一不可。
-const canChangeVersionStatus = computed(() =>
-    canManage.value && Boolean(node.value) && authorization.can(`${node.value}.confirm`),
-);
+// 版本状态变更、删除与元数据编辑沿用同一套授权：节点上的 `confirm` 与 `manage` 缺一不可。
+// 动作的落点按行判定：Team 工作区就是当前节点；System 目录里每行属于别的 Team，
+// 必须打到该包所属 Team 的 `packages` 节点（有那个 Team 的权限才显示入口）。
 // 上传资源按 Team 注册（modules/packages/resources.py），系统目录只读：说明入口在哪，
 // 避免用户在只读清单上找上传按钮。
 const uploadScopeNote = computed(() =>
@@ -257,6 +269,22 @@ const uploadScopeNote = computed(() =>
 const pageTitleDescription = computed(() =>
     systemWorkspace.value ? pageT("catalogDescription") : pageT("description"),
 );
+
+function rowActionNode(row: PackageRow): string {
+    if (!systemWorkspace.value) return node.value;
+    const teamId = row.team_id ?? "";
+    return teamId ? `team.${teamId}.packages` : "";
+}
+
+function canManageRow(row: PackageRow): boolean {
+    const target = rowActionNode(row);
+    return Boolean(target) && authorization.can(`${target}.manage`);
+}
+
+function canChangeVersionStatusFor(row: PackageRow): boolean {
+    const target = rowActionNode(row);
+    return canManageRow(row) && Boolean(target) && authorization.can(`${target}.confirm`);
+}
 
 const page = ref(1);
 const pageSize = 50;
@@ -851,12 +879,13 @@ function closeDetails() {
 
 async function setVersionStatus(row: PackageVersionRow, status: string): Promise<boolean> {
     const item = detailsPackage.value;
-    if (!item || !canChangeVersionStatus.value || versionStatusPending.value) return false;
+    const target = item ? rowActionNode(item) : "";
+    if (!item || !target || !canChangeVersionStatusFor(item) || versionStatusPending.value) return false;
     versionStatusPending.value = true;
     try {
         const preview = await transport.request({
             action: "manage",
-            node: node.value,
+            node: target,
             headers: {"Idempotency-Key": crypto.randomUUID()},
             data: {package_id: item.package_id, version: row.version, status, preview: true},
         });
@@ -864,7 +893,7 @@ async function setVersionStatus(row: PackageVersionRow, status: string): Promise
         if (previewFailure) throw previewFailure;
         const confirmation = await transport.request({
             action: "confirm",
-            node: node.value,
+            node: target,
             data: {package_id: item.package_id, version: row.version},
         });
         const confirmationFailure = packageFailure(confirmation);
@@ -875,7 +904,7 @@ async function setVersionStatus(row: PackageVersionRow, status: string): Promise
         }
         const response = await transport.request({
             action: "manage",
-            node: node.value,
+            node: target,
             headers: {"Idempotency-Key": crypto.randomUUID()},
             data: {
                 package_id: item.package_id,
@@ -908,7 +937,7 @@ async function changeVersionStatus(row: PackageVersionRow, event: Event) {
 }
 
 function openManage(row: PackageRow) {
-    if (!canManage.value || managePending.value) return;
+    if (!canManageRow(row) || managePending.value) return;
     managePackageId.value = row.package_id;
     metadataModel.value = {...row.metadata};
     packageStatus.value = row.status ?? "published";
@@ -924,7 +953,8 @@ function closeManage() {
 
 async function savePackage() {
     const item = managePackage.value;
-    if (!item || !canManage.value || managePending.value) return;
+    const target = item ? rowActionNode(item) : "";
+    if (!item || !target || !canManageRow(item) || managePending.value) return;
     const metadata: Record<string, unknown> = {...metadataModel.value};
     const name = typeof metadata.name === "string" ? metadata.name.trim() : "";
     manageError.value = null;
@@ -932,7 +962,7 @@ async function savePackage() {
     try {
         const response = await transport.request({
             action: "manage",
-            node: node.value,
+            node: target,
             headers: {"Idempotency-Key": crypto.randomUUID()},
             data: {
                 package_id: item.package_id,
@@ -953,6 +983,109 @@ async function savePackage() {
         manageError.value = cause instanceof Error ? cause.message : String(cause);
     } finally {
         managePending.value = false;
+    }
+}
+
+// 破坏性变更统一走"确认令牌"：`confirm` 动作签发令牌，`manage` 带 `delete` 与令牌执行。
+// 令牌目标由版本是否存在决定（见 modules/packages/resources.py 的 `confirmation`）。
+async function issueConfirmation(target: string, data: Record<string, unknown>) {
+    const confirmation = await transport.request({action: "confirm", node: target, data});
+    const failure = packageFailure(confirmation);
+    if (failure) throw failure;
+    const token = confirmation.data?.confirmation_token;
+    if (typeof token !== "string" || !token) {
+        throw new RequestFailure(pageT("invalid"), "validation", "invalid_response");
+    }
+    return token;
+}
+
+const versionDeleteTarget = ref<{packageId: string; version: PackageVersionRow} | null>(null);
+const versionDeletePending = ref(false);
+
+function openVersionDelete(row: PackageVersionRow) {
+    const item = detailsPackage.value;
+    if (!item || !canChangeVersionStatusFor(item) || versionDeletePending.value) return;
+    versionDeleteTarget.value = {packageId: item.package_id, version: row};
+}
+
+function closeVersionDelete() {
+    if (versionDeletePending.value) return;
+    versionDeleteTarget.value = null;
+}
+
+async function deleteVersion() {
+    const pending = versionDeleteTarget.value;
+    const item = detailsPackage.value;
+    const target = item ? rowActionNode(item) : "";
+    if (!pending || !item || !target || !canChangeVersionStatusFor(item) || versionDeletePending.value) return;
+    versionDeletePending.value = true;
+    try {
+        const token = await issueConfirmation(target, {
+            package_id: pending.packageId,
+            version: pending.version.version,
+        });
+        const response = await transport.request({
+            action: "manage",
+            node: target,
+            headers: {"Idempotency-Key": crypto.randomUUID()},
+            data: {
+                package_id: pending.packageId,
+                version: pending.version.version,
+                delete: true,
+                confirmation_token: token,
+            },
+        });
+        const failure = packageFailure(response);
+        if (failure) throw failure;
+        versionDeleteTarget.value = null;
+        toast.push(pageT("versionDeleted"), "success");
+        await load();
+    } catch (cause) {
+        toast.push(cause instanceof Error ? cause.message : String(cause), "error");
+    } finally {
+        versionDeletePending.value = false;
+    }
+}
+
+const packageDeleteTarget = ref<PackageRow | null>(null);
+const packageDeletePending = ref(false);
+
+function openPackageDelete() {
+    const item = managePackage.value;
+    if (!item || !canManageRow(item) || packageDeletePending.value) return;
+    packageDeleteTarget.value = item;
+}
+
+function closePackageDelete() {
+    if (packageDeletePending.value) return;
+    packageDeleteTarget.value = null;
+}
+
+async function deletePackage() {
+    const row = packageDeleteTarget.value;
+    const target = row ? rowActionNode(row) : "";
+    if (!row || !target || !canChangeVersionStatusFor(row) || packageDeletePending.value) return;
+    packageDeletePending.value = true;
+    try {
+        const token = await issueConfirmation(target, {package_id: row.package_id});
+        const response = await transport.request({
+            action: "manage",
+            node: target,
+            headers: {"Idempotency-Key": crypto.randomUUID()},
+            data: {package_id: row.package_id, delete: true, confirmation_token: token},
+        });
+        const failure = packageFailure(response);
+        if (failure) throw failure;
+        packageDeleteTarget.value = null;
+        manageDialogOpen.value = false;
+        managePackageId.value = "";
+        if (detailsPackageId.value === row.package_id) closeDetails();
+        toast.push(pageT("packageDeleted"), "success");
+        await load();
+    } catch (cause) {
+        toast.push(cause instanceof Error ? cause.message : String(cause), "error");
+    } finally {
+        packageDeletePending.value = false;
     }
 }
 
@@ -1069,7 +1202,7 @@ function nextPage() {
                             {{ pageT("upload") }}
                         </UiButton>
                         <UiButton
-                            v-if="canManage"
+                            v-if="canManageRow(row)"
                             variant="ghost"
                             :disabled="managePending"
                             @click="openManage(row)"
@@ -1238,7 +1371,7 @@ function nextPage() {
                         </template>
                         <template #status="{row}">
                             <select
-                                v-if="canChangeVersionStatus"
+                                v-if="detailsPackage && canChangeVersionStatusFor(detailsPackage)"
                                 class="status-select"
                                 :aria-label="pageT('statusChange')"
                                 :value="row.status ?? 'published'"
@@ -1263,13 +1396,23 @@ function nextPage() {
                             {{ formatTimestamp(row.created_at, localeName) }}
                         </template>
                         <template #actions="{row}">
-                            <UiButton
-                                v-if="canDownloadVersion(detailsPackage.package_id)"
-                                variant="ghost"
-                                @click="downloadVersion(detailsPackage.package_id, row.version)"
-                            >
-                                {{ pageT("download") }}
-                            </UiButton>
+                            <div class="row-actions">
+                                <UiButton
+                                    v-if="canDownloadVersion(detailsPackage.package_id)"
+                                    variant="ghost"
+                                    @click="downloadVersion(detailsPackage.package_id, row.version)"
+                                >
+                                    {{ pageT("download") }}
+                                </UiButton>
+                                <UiButton
+                                    v-if="canChangeVersionStatusFor(detailsPackage)"
+                                    variant="danger"
+                                    :disabled="versionDeletePending || versionStatusPending"
+                                    @click="openVersionDelete(row)"
+                                >
+                                    {{ pageT("deleteVersion") }}
+                                </UiButton>
+                            </div>
                         </template>
                     </UiDataTable>
                 </section>
@@ -1304,11 +1447,77 @@ function nextPage() {
                 <p v-if="manageError" class="form-error">{{ manageError }}</p>
             </div>
             <template #footer>
+                <UiButton
+                    v-if="managePackage && canChangeVersionStatusFor(managePackage)"
+                    variant="danger"
+                    :disabled="managePending || packageDeletePending"
+                    @click="openPackageDelete"
+                >
+                    {{ pageT("deletePackage") }}
+                </UiButton>
                 <UiButton variant="ghost" :disabled="managePending" @click="closeManage">
                     {{ pageT("close") }}
                 </UiButton>
                 <UiButton variant="primary" :disabled="managePending" @click="savePackage">
                     {{ pageT("save") }}
+                </UiButton>
+            </template>
+        </UiDialog>
+
+        <UiDialog
+            :open="versionDeleteTarget !== null"
+            :title="pageT('deleteVersionTitle')"
+            :busy="versionDeletePending"
+            @close="closeVersionDelete"
+        >
+            <div v-if="versionDeleteTarget" class="confirm-form">
+                <p>{{ pageT("deleteVersionBody") }}</p>
+                <dl class="package-details">
+                    <div>
+                        <dt>{{ pageT("packageId") }}</dt>
+                        <dd><code>{{ versionDeleteTarget.packageId }}</code></dd>
+                    </div>
+                    <div>
+                        <dt>{{ pageT("version") }}</dt>
+                        <dd><code>{{ versionDeleteTarget.version.version }}</code></dd>
+                    </div>
+                </dl>
+            </div>
+            <template #footer>
+                <UiButton variant="ghost" :disabled="versionDeletePending" @click="closeVersionDelete">
+                    {{ baseT("common.cancel") }}
+                </UiButton>
+                <UiButton variant="danger" :disabled="versionDeletePending" @click="deleteVersion">
+                    {{ pageT("deleteConfirm") }}
+                </UiButton>
+            </template>
+        </UiDialog>
+
+        <UiDialog
+            :open="packageDeleteTarget !== null"
+            :title="pageT('deletePackageTitle')"
+            :busy="packageDeletePending"
+            @close="closePackageDelete"
+        >
+            <div v-if="packageDeleteTarget" class="confirm-form">
+                <p>{{ pageT("deletePackageBody") }}</p>
+                <dl class="package-details">
+                    <div>
+                        <dt>{{ pageT("packageId") }}</dt>
+                        <dd><code>{{ packageDeleteTarget.package_id }}</code></dd>
+                    </div>
+                    <div>
+                        <dt>{{ pageT("versionCount") }}</dt>
+                        <dd>{{ packageDeleteTarget.version_count }}</dd>
+                    </div>
+                </dl>
+            </div>
+            <template #footer>
+                <UiButton variant="ghost" :disabled="packageDeletePending" @click="closePackageDelete">
+                    {{ baseT("common.cancel") }}
+                </UiButton>
+                <UiButton variant="danger" :disabled="packageDeletePending" @click="deletePackage">
+                    {{ pageT("deleteConfirm") }}
                 </UiButton>
             </template>
         </UiDialog>
@@ -1328,9 +1537,15 @@ function nextPage() {
 
 .create-form,
 .manage-form,
-.upload-form {
+.upload-form,
+.confirm-form {
     display: grid;
     gap: 14px;
+}
+
+.confirm-form > p {
+    margin: 0;
+    color: #c7d2fe;
 }
 
 .field,

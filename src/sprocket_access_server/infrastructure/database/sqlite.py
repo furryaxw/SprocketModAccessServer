@@ -261,7 +261,12 @@ SCHEMA = """
              sent_at      INTEGER,
              last_error   TEXT
          );
-         CREATE INDEX IF NOT EXISTS idx_email_outbox_pending ON email_outbox (status, available_at); \
+         CREATE INDEX IF NOT EXISTS idx_email_outbox_pending ON email_outbox (status, available_at);
+         CREATE TABLE IF NOT EXISTS data_migrations
+         (
+             name       TEXT PRIMARY KEY,
+             applied_at INTEGER NOT NULL
+         ); \
          """
 
 CURRENT_SCHEMA_VERSION = 1
@@ -295,8 +300,109 @@ class SQLiteDatabase:
                     (version,),
                 )
             self._seed_permission_templates(connection)
+            self._apply_data_migrations(connection)
             self._repair_zero_timestamps(connection)
             logger.debug("database initialized path=%s schema_version=%d", self.path, CURRENT_SCHEMA_VERSION)
+
+    @classmethod
+    def _apply_data_migrations(cls, connection: sqlite3.Connection) -> None:
+        """一次性的数据迁移，记在 `data_migrations` 里各跑一次。
+
+        与 `_repair_zero_timestamps` 那种"每次都能安全重放"的修复不同：权限升级迁移一旦
+        被管理员事后撤销，重启不能再把它加回去，所以必须有落库的凭据。
+        """
+        applied = {
+            str(row["name"])
+            for row in connection.execute("SELECT name FROM data_migrations").fetchall()
+        }
+        for name, migrate in (
+                ("developer-package-confirm", cls._migrate_developer_package_confirm),
+        ):
+            if name in applied:
+                continue
+            migrate(connection)
+            connection.execute(
+                "INSERT OR IGNORE INTO data_migrations(name, applied_at) VALUES (?, ?)",
+                (name, int(time.time())),
+            )
+
+    @staticmethod
+    def _migrate_developer_package_confirm(connection: sqlite3.Connection) -> None:
+        """给还未定制过的 Developer 模板/成员授权补上 `packages.confirm`。
+
+        Team 的模板是创建时从 Template Team 复制的，成员授权记的是模板实例节点（模板内容变化
+        在求值阶段生效），所以升级已有 Team 要同时处理这两种历史形状：
+        「模板克隆」——节点集合与升级前的 Developer 完全一致；「展开节点授权」——老 Team 成员
+        手里那份 grant_assignments。两者都只认"一个不多一个不少"的旧集合，动过的一律不碰。
+        """
+        for item in load_template_seed("team"):
+            nodes = item.get("nodes")
+            if not isinstance(nodes, list):
+                continue
+            added = sorted(str(node) for node in nodes if str(node).endswith(".packages.confirm"))
+            if not added:
+                continue
+            legacy = sorted(str(node) for node in nodes if node not in added)
+            SQLiteDatabase._upgrade_team_templates(connection, added, legacy)
+            SQLiteDatabase._upgrade_expanded_grants(connection, added, legacy)
+
+    @staticmethod
+    def _upgrade_team_templates(connection: sqlite3.Connection, added: list[str], legacy: list[str]) -> None:
+        for row in connection.execute(
+                "SELECT team_id, template_id FROM permission_templates "
+                "WHERE team_id NOT IN (?, ?) AND template_kind = 'permission_template'",
+                ("system", "template"),
+        ).fetchall():
+            team_id = str(row["team_id"])
+            template_id = str(row["template_id"])
+            current = sorted(
+                str(item["node"]) for item in connection.execute(
+                    "SELECT node FROM template_assignments WHERE template_id = ?", (template_id,)
+                ).fetchall()
+            )
+            if current != SQLiteDatabase._scoped(legacy, team_id):
+                continue
+            for node in SQLiteDatabase._scoped(added, team_id):
+                connection.execute(
+                    """INSERT OR IGNORE INTO template_assignments
+                           (assignment_id, template_id, node, effect, priority, grant_effect)
+                       VALUES (?, ?, ?, 'allow', 0, 'allow')""",
+                    (f"{template_id}:{node.rsplit('.', 1)[-1]}", template_id, node),
+                )
+                connection.execute("INSERT OR IGNORE INTO permission_nodes(node) VALUES(?)", (node,))
+
+    @staticmethod
+    def _upgrade_expanded_grants(connection: sqlite3.Connection, added: list[str], legacy: list[str]) -> None:
+        for row in connection.execute(
+                "SELECT grant_id, team_id, source_type, source_id FROM grants "
+                "WHERE team_id NOT IN (?, ?) AND status = 'active' AND template_id IS NULL",
+                ("system", "template"),
+        ).fetchall():
+            team_id = str(row["team_id"])
+            grant_id = str(row["grant_id"])
+            current = sorted(
+                str(item["node"]) for item in connection.execute(
+                    "SELECT node FROM grant_assignments WHERE grant_id = ?", (grant_id,)
+                ).fetchall()
+            )
+            if current != SQLiteDatabase._scoped(legacy, team_id):
+                continue
+            for index, node in enumerate(SQLiteDatabase._scoped(added, team_id)):
+                connection.execute(
+                    """INSERT OR IGNORE INTO grant_assignments
+                           (assignment_id, grant_id, node, effect, priority, grant_effect, source_type, source_id)
+                       VALUES (?, ?, ?, 'allow', 0, 'allow', ?, ?)""",
+                    (
+                        f"{grant_id}:confirm-{index}", grant_id, node,
+                        str(row["source_type"]), str(row["source_id"]),
+                    ),
+                )
+                connection.execute("INSERT OR IGNORE INTO permission_nodes(node) VALUES(?)", (node,))
+
+    @staticmethod
+    def _scoped(nodes: list[str], team_id: str) -> list[str]:
+        """Template Team 的节点 → 某个 Team 的节点（与 `clone_template_team` 同一套改写）。"""
+        return sorted(str(node).replace("team.template.", f"team.{team_id}.", 1) for node in nodes)
 
     @staticmethod
     def _repair_zero_timestamps(connection: sqlite3.Connection) -> None:
